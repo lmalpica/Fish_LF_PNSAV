@@ -1,0 +1,123 @@
+---
+title: "PNSAV Fish & LF abundance"
+author: "Luis Malpica"
+date: "Mar, 2017"
+output: 
+  html_document:
+    code_folding: hide
+---
+```{r setup, include=FALSE}
+#knitr::opts_chunk$set(echo = FALSE)
+#code_folding: hide
+```
+
+```{r Libraries & data, include=F, cache=FALSE, message=F}
+rm(list = ls())
+
+#load
+#library(plyr)
+#library(tidyr)
+library(reshape2)
+library(dplyr)
+library(ggplot2)
+library(zoo)
+#library(pvclust)
+
+#A custom theme for ggplot####
+theme_gg <- function(base_size = 11, base_family = "") {
+  theme_light() +
+    theme(
+      panel.grid.major = element_blank(),
+      panel.grid.minor = element_blank(),
+      strip.background = element_rect(fill = NA, colour = NA),
+      strip.text.x = element_text(colour = "grey10"),
+      axis.text = element_text(colour = "grey20",size=8),
+      axis.title = element_text(colour = "grey20",size=10),
+      legend.title = element_text(colour = "grey20", size = rel(1.2)),
+      panel.border = element_rect(fill = NA, colour = "grey70", size = 1),
+      legend.key.size = unit(0.8, "lines"),
+      legend.text = element_text(size = rel(1), colour = "grey20"),
+      legend.key = element_rect(colour = NA)
+    )
+}
+```
+
+```{r Data manipulation, include=T}
+#Read and manipulate data####
+d10_14 <- read.table("data/PNSAVFish10to14.csv",sep=",", header=T)
+d16 <- read.table("data/PNSAVFish16.csv",sep=",", header=T)
+dLF <- read.table("data/LFPNSAV14_16.csv",sep=",", header=T)
+
+d10_14_melt <- reshape2::melt(d10_14, id.vars = c("Sitio", "Fecha","Profundidad",
+                                                  "Transecto"),
+                    variable.name = "Species", value.name = "Abundance")
+
+d10_14_melt <- merge((summarise(group_by(d10_14_melt,Sitio,Fecha,Profundidad),
+                             sumSpm2 = (sum(Abundance,na.rm = T))/200)), 
+                  (summarise(group_by(d10_14_melt,Sitio,Fecha,Profundidad),
+                             AveSpm2 = (mean(Abundance,na.rm = T))/200)))
+
+d16_melt <- merge((summarise(group_by(d16,Sitio,Fecha,Profundidad),
+                             sumSpm2 = (sum(Abundancia,na.rm = T))/200)), 
+                  (summarise(group_by(d16,Sitio,Fecha,Profundidad),
+                             AveSpm2 = (mean(Abundancia,na.rm = T))/200)))
+
+d <- rbind(d10_14_melt,d16_melt)
+d$Fecha <- as.Date(d$Fecha, "%d-%b-%y")
+d$Depth <- ifelse(d$Profundidad >=6, "Deep", "Shallow")
+
+dLF <- dplyr::mutate(dLF, Area = 500*Transectos)
+dLF <- dplyr::filter(dLF, Transectos != 0)
+dLF <- dplyr::select(dLF, Sitio, Fecha, Profundidad, LFCount, Area)
+dLF$Fecha <- as.Date(dLF$Fecha, "%d-%b-%y")
+dLF$Season <- rep("Spring") 
+dLF$year<-as.numeric(format(dLF$Fecha, "%Y"))
+
+dLF_sum1 <- merge(summarise(group_by(dLF,year,Season,Sitio),
+                             LFCount = (sum(LFCount,na.rm = T))),
+                  summarise(group_by(dLF,year,Season,Sitio),
+                             Area = (sum(Area,na.rm = T))))
+dLF_sum1 <- dplyr::mutate(dLF_sum1, Density = (LFCount/Area)*10000) #LF dens per 100m-2
+
+#now PNSAV wide
+dLF_sum2 <- merge(summarise(group_by(dLF,year,Season),
+                             LFCount = (sum(LFCount,na.rm = T))),
+                  summarise(group_by(dLF,year,Season),
+                             Area = (sum(Area,na.rm = T))))
+dLF_sum2 <- dplyr::mutate(dLF_sum2, Density = (LFCount/Area)*10000) #LF dens per Ha
+
+#Convert dates to seasons and chose spring/summer only
+      yq <- as.yearqtr(as.yearmon(d$Fecha, "%d-%b-%y") + 1/12)
+      d$Season <- factor(format(yq, "%q"), levels = 1:4, 
+      labels = c("winter", "spring", "summer", "fall"))
+tseason <- cbind("spring","summer")
+d_season <- dplyr::filter(d, Season %in% tseason)
+
+```
+
+Las dos gráficas siguientes representan densidad de peces (Número de individuos por metro cuadrado), la primera es para todas las temporadas de muestreo de 2010 a 2016 y la segunda es solo para los muestreos de primavera/verano
+
+```{r fish comm plots, include=T,cache=FALSE, message=F}
+#Fish community
+ggplot(data=d, aes(x=Fecha, y=AveSpm2, group = Depth, colour = Depth)) +
+    geom_point() + geom_line() + facet_wrap(c("Sitio", "Depth")) +
+  theme_gg()
+
+ggplot(data=d_season, aes(x=Fecha, y=AveSpm2, group = Depth, colour = Depth)) +
+    geom_point() + geom_line() + facet_wrap(c("Sitio", "Depth")) +
+  theme_gg()
+```
+
+Las siguientes dos gráficas son solo para densidad de pez león (número de individuos por hectárea), la primera es para  todos los sitios de muestreo y la segunda es un promedio de aquellos sitios en donde hubo muestreo consecutivo durante los tres años, que corresponde con sus sitios de muestreo excepto "Ingenieros"", que solo se buscó pez león en 2016. Dadas las bajas abundancias de pez león, a comparación de otras zonas como Cozumel (50-250 ind./Ha) o las Bahamas (hasta 350 ind./Ha), yo propondría usar este valor como densidad global, y discutir en su momento que este valor muy probablement está sobreestimando la densidad real del pez león a nivel SAV, aunque como se puede ver en sitios como Anegada de Adentro puede que ocurran agregaciones puntuales de altas densidades.
+
+```{r LF fish plots, include=T, cache=FALSE, message=F}
+#LF
+ggplot(data = dLF_sum1, aes(x=year, y=Density)) +
+  geom_point() + geom_line() + facet_wrap(c("Sitio")) +
+  theme_gg() + 
+  theme(axis.text.x = element_blank())
+
+ggplot(data = dLF_sum2, aes(x=year, y=Density)) +
+  geom_point() + geom_line() +
+  theme_gg()
+```
